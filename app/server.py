@@ -2,11 +2,14 @@ from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 import uvicorn, aiohttp, asyncio
 from io import BytesIO
+import time
 
 from fastai import *
 from fastai.vision import *
+
 
 model_file_url = 'https://drive.google.com/file/d/1JgoUiSrw7HaBOegbQbcaW5y-W0NNBME_/view?usp=sharing'
 model_file_name = 'model'
@@ -25,11 +28,8 @@ async def download_file(url, dest):
             with open(dest, 'wb') as f: f.write(data)
 
 async def setup_learner():
-    await download_file(model_file_url, path/'models'/f'{model_file_name}.pth')
-    data_bunch = ImageDataBunch.single_from_classes(path, classes,
-        ds_tfms=get_transforms(), size=224).normalize(imagenet_stats)
-    learn = cnn_learner(data_bunch, models.resnet34, pretrained=False)
-    learn.load(model_file_name)
+    await download_file(model_file_url, path/f'{model_file_name}.pkl')
+    learn = load_learner(path)
     return learn
 
 loop = asyncio.get_event_loop()
@@ -39,16 +39,26 @@ loop.close()
 
 @app.route('/')
 def index(request):
-    html = path/'view'/'index.html'
-    return HTMLResponse(html.open().read())
+    try:
+        html = path/'view'/'index.html'
+        return HTMLResponse(html.open().read())
+    except Exception as e:
+        return JSONResponse(str(e))
 
 @app.route('/analyze', methods=['POST'])
 async def analyze(request):
-    data = await request.form()
-    img_bytes = await (data['file'].read())
-    img = open_image(BytesIO(img_bytes))
-    return JSONResponse({'result': str(learn.predict(img)[0])})
+    try:
+        t = time.time() # get execution time
+        data = await request.form()
+        img_bytes = await (data['file'].read())
+        img = open_image(BytesIO(img_bytes))
+        result,_,prob = learn.predict(img)
+        dt = time.time() - t
+        # prob = [round(i,3) for i in prob.data.numpy()]
+        dtexectime = ("%0.03f seconds" % (dt))
+        return JSONResponse({'result': str(result.obj),'executiontime': dtexectime, 'probability':  str(prob)})
+    except Exception as e:
+        return JSONResponse({'error:',str(e)})
 
 if __name__ == '__main__':
-    if 'serve' in sys.argv: uvicorn.run(app, host='0.0.0.0', port=8080)
-
+    if 'serve' in sys.argv: uvicorn.run(app, host='0.0.0.0', port=5000)
